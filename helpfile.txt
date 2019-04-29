@@ -1,0 +1,39 @@
+============== RIP SCANNER HELP ===============
+
+This program is designed to scan the transfer functions
+of the GEQ line of equalizers produced by Giesbrecht
+Electronics. Each band is measured, saved, displayed,
+and can be saved to a KV1 file for additional analysis.
+
+Scanned param:
+Determines if the program will scan output amplitude vs
+frequency or input amplitude. 
+
+Aux. Channels: Determine if channels 3 and/or 4 should
+also have their voltages recorded vs. the scanned param.
+
+Frequency Entry:
+The frequency entry box accepts frequencies separated by
+commas. Don't write units, Hertz is expected. This value
+is only used if 'linear' or 'log' is selected from the
+radiobuttons.
+
+Frequency Band:
+These controls are only enabled when the scanned param is
+set to 'Freq. (multi-band)'. It is designed to simplify
+the GEQ1/2 QA process. It allows the user to save the
+TF to a specific band/gain pair and save a set of 7 pairs
+to one characterizing KV1 file.
+
+Scan Status:
+This indicator only present valid data when the scanned 
+param is set to 'Freq. (multi-band)'. It designates which
+band/gain pairs have had their TF collected.
+
+Control Mode:
+Specifies how the oscilloscope's settings are determined
+during a scan. 'Auto' lets the program determine the
+settings, whereas 'From File' lets you specify a file
+containing the specific settings you'd like to use.
+
+*** Copyright Giesbrecht Electronics - 2019 ***
