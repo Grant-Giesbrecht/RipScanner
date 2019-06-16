@@ -1,3 +1,34 @@
+#***************************************************************************************************#
+#*********************                        RIP SCANNER                     **********************#
+#*********************       CREATED ON 28.4.2019   BY GRANT GIESBRECHT       **********************#
+# This program works in conjunction with a Rigol DS2074Z+ oscilloscope and Siglent SDG2042X         #
+# arbitrary waveform generator to rapidly and accurately scan transfer functions of circuits. The   #
+# program includes a GUI for ease of use, along with a detailed print out of actions to the command #
+# line. Python was used because of the simplicity of PyVisa, matplotlib, tkinter, and porting it    #
+# across numerous platforms. Although designed for specific scopes, only a dozen or so commands are #
+# device specific. Comments next to the SCPI commands describe their purpose - referencing your     #
+# device's programming manual should allow you to quickly and easily replace these commands with    #
+# those required by your device.                                                                    #
+#                                                                                                   #
+# Features:                                                                                         #
+#   * Automatic Data Integrity and Equilibrium Checker:                                             #
+#       Rip Scanner includes an automatic checking facility to ensure that the data received from   #
+#       the scope are not corrupt and represent the equilibrium state. It prevents locking if bad   #
+#       data are received, prevents incorrect measurements from sabotaging scans, and improves the  #
+#       reliability of the system. Furthermore, by advancing to the next scan point upon receiving  #
+#       good data, scans are completed much faster than with the old meathod of using a fixed       #
+#       delay.                                                                                      #
+#                                                                                                   #
+#   * Automatic Oscilloscope Scaling:  (Dual-sweep system)                                          #
+#       Although the time/div scale can be easily determined for any frequency, the vertical scale  #
+#       isn't as well defined. RIP scanner uses a dual-scan technique in which a low vertical       #
+#       resolution scan is used to determine the fine vertical resolution of the main scan.         #
+#       This system allows for large dynamic ranges of the DUT's output to be captured with ease    #
+#       and precision.                                                                              #
+#                                                                                                   #
+#***************************************************************************************************#
+
+
 #Import packages
 
 import visa
@@ -12,6 +43,7 @@ from matplotlib.figure import Figure
 from time import sleep
 import time
 from kvar import *
+import os
 
 import numpy as np
 
@@ -22,22 +54,25 @@ import numpy as np
 numPeaksPerFrame = 10; #No. oscillations to fit on the scope screen when aquiring data
 numDivHoriz = 12; #No. horiz. divs on scope screen
 numDivVert = 8; #No. vert divs on scope scren
-timeWithConstReading = .2; #Time in seconds for reading to stay the same before recording the data point
-maxPercentAccepted = 10; #Maximum percent change allowed while still being considered 'constant'
-maxRetryTime = 6; #Maximum time allowed for scan to retry getting a consistant data point
+timeWithConstReading = .5; #Time in seconds for reading to stay the same before recording the data point (default: .2) ().5 also good)
+maxPercentAccepted = 5; #Maximum percent change allowed while still being considered 'constant' (default: 10) (5 also good)
+maxPercentAcceptedFrequencyDelta = 5; #Maximum percent difference allowed between set frequency and measured frequency (to ensure equilibrium) (default: 5)
+maxRetryTime = 6; #Maximum time allowed for scan to retry getting a consistant data point (default: 6)
 
 #Vertical Resolution Parameters
-vertExpandFactor = 1.5; #factor by which to expand the vertical scale when guessing how to scale vertically (bigger # shrinks signal more, 1 is min). I recommend 1.5
+vertExpandFactor = 1.5; #factor by which to expand the vertical scale when guessing how to scale vertically (bigger # shrinks signal more, 1 is min). (default: 1.5)
 turnOffAfterScan = False; #Turn off the generator after an individaual scan
-setMeasDelay = 1000; #Delay in ms between setting the lab instruments to the data point & recording the values
+setMeasDelay = 1200; #Delay in ms between setting the lab instruments to the data point & first measuring the values (to let equilibrium set up) (default: 700)
 
 #Dual-sweep settings
 autoDualSweep = True; #When performing an automatic-scaled scan
-crudeVertSweepFactor = 2; #Algorithm: volts per division = (input_amplitude * crudeVertSweepFactor);
-fineVertScaleFactor = 1.2; #Factor by which to scale measured amplitude when selecting a fine scale
+crudeVertSweepFactor = 2; #Algorithm: volts per division = (input_amplitude * crudeVertSweepFactor); (Default: 2)
+fineVertScaleFactor = 1.2; #Factor by which to scale measured amplitude when selecting a fine scale (Default: 1.2)
 
 #Save settings
 saveUntilClear = True; #(If not in multi-band mode) saves TFs until 'Clear' is hit. Saves all when save command given.
+
+voiceAlerts = False;
 
 #*********************************************************#
 #*********************************************************#
@@ -117,11 +152,15 @@ scope_addr = list(filter(lambda x: 'DS1Z' in x, instruments))
 awg_addr = list(filter(lambda x: 'SDG2X' in x, instruments))
 if len(scope_addr) != 1 or len(awg_addr) != 1:
     print('Failed to identify test instruments', instruments)
+    if (voiceAlerts):
+        os.system("say Verbindung zu Testgerat fehlgeschlagen -r 150& &>/dev/null");
     sys.exit(-1)
 scope = rm.open_resource(scope_addr[0], timeout=30, chunk_size=1024) # bigger timeout for long mem
 print("Connected to scope");
 awg = rm.open_resource(awg_addr[0], timeout=30, chunk_size=1024) # bigger timeout for long mem
 print("Connected to generator");
+if (voiceAlerts):
+    os.system("say Verbindung zum Testgerat erfolgreich -r 150& &>/dev/null &");
 
 #Initialize oscilloscope to collect data
 #scope.write("MEAS:COUN:SOUR CHAN1");
@@ -406,8 +445,25 @@ def meas(fmeas, imeas, omeas, meas3, meas4, crudeSweep):
             return False;
 
 
+        #**********************************************************************************#
+        #*********************  DATA INTEGRITY AND EQUILIBRIUM CHECKER ********************#
+        # The introduction of this code accelerated the scan speed dramatically because it #
+        # eliminated the need to wait a fixed time to establish equilibrium. These fixed   #
+        # times were inordinately large to help even the slowest sample points to scan, but#
+        # failures were not uncommon. The boost to data reliability and elimination of     #
+        # corrupt data has made the program far faster, more accurate, and reliable. NICE. #
+        #**********************************************************************************#
+        #                                                                                  #
+        # Looks for:                                                                       #
+        #   - Corrupt data from scope (ie. value > 1e30)                                   #
+        #   - Measured and set frequency don't match (Added 5.5.2019)                      #
+        #   - Value changes too quickly (not at equilibrium)                               #
+        #                                                                                  #
+        #**********************************************************************************#
+
         #Read everything and check for equilibrium and data integrity
         num_failed = 0;
+        start = time.time(); #Get total time req'd for data point
         sleep(setMeasDelay*1e-3); #Initial pause to let everything equilibrate
         oldf = 0;
         oldi = 0;
@@ -415,12 +471,11 @@ def meas(fmeas, imeas, omeas, meas3, meas4, crudeSweep):
         old3 = 0;
         old4 = 0;
         verifying = False; #Specifies if it's collected a first point or verifying that point w/ a second measurement.
-        start = time.time(); #Get total time req'd for data point
         total_no_scans = 0;
         while (True): #continue trying until accurate readings are had...
             total_no_scans += 1;
             #Take a measurement. If it fails (an exception occurs or data > 1e30 (corrupted)), increment num_failed
-            if (not collect()): #Results of collect() are saved in global variables fr, c1, c2, c3, c4 because I can't pass by reference variables :(
+            if (not collect()): #Results of collect() are saved in global variables fr, c1, c2, c3, c4 because I can't pass by reference variables :(. Collect will return false if bad/corrupt data is received (value will be > 1e30).
                 num_failed += 1;
                 sleep(.333); #Wait 100 ms
                 if (num_failed > 15): #Cancel scan if too many attempts fail (Takes a maximum of 5 seconds to fail + initial delay)
@@ -447,6 +502,15 @@ def meas(fmeas, imeas, omeas, meas3, meas4, crudeSweep):
                             return False;
                         sleep(timeWithConstReading); #Wait a bit...
                 else:
+                    if (mpc(fr, freqs[idx]) > maxPercentAcceptedFrequencyDelta): #Ensure measured and set frequencies match (within a certain margin of error)
+                        print("The measurement, although non-corrupt, failed the equilibrium+integrity check.");
+                        print("\tFrequency was out of spec. Set: " + str(freqs[idx]) + " Hz \tMeas: " + str(fr) + " Hz");
+                        print("\tTET: "+str(time.time()-start));
+                        if (time.time() - start > maxRetryTime):
+                            print("Measurement retry time expired. Aborting scan.");
+                            return False;
+                        sleep(timeWithConstReading); #Wait a bit...
+                        continue;
                     verifying = True;
                     oldf = fr;
                     oldi = c1;
@@ -463,6 +527,9 @@ def meas(fmeas, imeas, omeas, meas3, meas4, crudeSweep):
         meas3.append(c3);
         meas4.append(c4);
 
+        #**********************************************************************************#
+        #*****************  END of DATA INTEGRITY AND EQUILIBRIUM CHECKER *****************#
+        #**********************************************************************************#
 
         # if (aquisitionMode.get() == 0):
         #     pass;
@@ -508,6 +575,8 @@ def scan():
         tk.messagebox.showerror("Scan Failed!", "Failed to determine sample frequencies/amplitudes");
         return False;
 
+    print("Frequencies to measure: (Hz)" + str(freqs));
+
     #Clear buffers
     fmeas = [];
     omeas = [];
@@ -519,6 +588,7 @@ def scan():
 
     #Perform measurements (If set to auto-vertical scale dual-auto-sweep, this will be the crude sweep)
     if (not meas(fmeas, imeas, omeas, meas3, meas4, True)): #'True' says to do the crude-sweep. This will be ignored if not in automatic & dual-sweep modes.
+        # os.system("say Scan fehlgeschlagen -r 150& &>/dev/null &");
         tk.messagebox.showerror("Scan Failed!", "Failed to complete measurements.");
         return False;
 
@@ -528,6 +598,7 @@ def scan():
     if (aquisitionMode.get() == 0 and autoDualSweep == True): #If set to auto vertical scale (!from file) and dual-sweep is on...
         print("Course-scan completed successfully.");
         if (not getFineScale(fmeas, imeas, omeas, meas3, meas4)): #Get fine-res sample freqs/ampls
+            # os.system("say Scan fehlgeschlagen -r 150& &>/dev/null &");
             tk.messagebox.showerror("Scan Failed!", "Failed to determine fine-resolution vertical scales.");
             return False;
 
@@ -539,13 +610,19 @@ def scan():
         meas4 = [];
 
         if (not meas(fmeas, imeas, omeas, meas3, meas4, False)): #'False' says to do the fine-sweep.
+            # os.system("say Scan fehlgeschlagen -r 150& &>/dev/null &");
             tk.messagebox.showerror("Scan Failed!", "Failed to complete fine-resolution measurements.");
             return False;
         print("Fine-resolution scan completed successfully.");
     else:
         print("Scan completed successfully.");
 
-    print("Scan time: " + str(time.time() - scan_start) + " sec");
+    duration = (time.time() - scan_start);
+    if (voiceAlerts):
+        os.system("say Scan abgeschlossen.     "+ str(len(fmeas)) + " Punkte in " + str(round(duration)) + " Sekunden gescannt -r 150& &>/dev/null");
+        "19 Punkte in 5 Sekunden gescannt"
+
+    print("Scan time: " + str(duration) + " sec");
 
     #Add to graph
     if (scanMode.get() == 0):
@@ -670,6 +747,7 @@ def scan():
 
         print("Scaned band: "+bandstr + "\tGain: " + gainstr);
 
+
     redrawGraph();
 
     #Auto-next band
@@ -699,7 +777,8 @@ def getSampleFreqsAmpls():
             except:
                 print("Failed to read number of frequency steps ("+scaleNumberEntry1.get()+")");
                 return False;
-            freqs = np.linspace(a, b, c)
+            print("From 1e" + str(a) + " to 1e" + str(b) + " in " + str(steps));
+            freqs = np.linspace(a, b, c);
         elif scale.get() == 1: #Log
             try:
                 a = np.log10(float(scaleNumberEntry0.get()));
@@ -889,8 +968,10 @@ def redrawGraph():
     ##    ##plot.cla();
     ##    plot.semilogx([10, 33, 100, 330, 1e3, 3.3e3, 20e3], [1, 0, 1.6, 2, 2.5, 16, 22]);
     if (scanMode.get() == 0):
-        plot.set_ylim(0, 10);
-        plot.set_xlim(0, 10);
+        plot.set_xlabel("Input Amplitude (Vpp)");
+        plot.set_ylabel("Output Amplitude (Vpp)");
+        # plot.set_ylim(0, 10);
+        # plot.set_xlim(0, 10);
     else:
         plot.set_ylim(-40, 40);
         plot.set_xlim(10, 25e3);

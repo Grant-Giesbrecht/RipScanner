@@ -1,0 +1,28 @@
+Aight my dude, here's the play. Rather than some iterative, guess and check slow method,
+you get the auto-vertical-scale by doing two complete runs through the TF. The first run
+sets the ampl. by a very crude (high value) constant (ie. give 2V/div w/ 1Vpp in). The data are used to get an estimate for the TF which is used to calculate close vertical-
+scales for the second TF. You'll need a setting, enable dual-auto or one-pass-auto?
+
+----------------------------------------------------------------------------
+
+* Add an "Aquisition" panel which lets you select how the program determines
+scope settings. The two options would be "Automatic" and "From File". You
+could then feed it a file with V/div & t/div, trigger level, single vs normal
+trigger. It will also let you select between Vrms, Vpp, and both.
+
+* Add a progress bar which shows how far along the scan is. If you do a very
+high res scan (maybe 100 sample points) it might take upwards of a minute or
+so. (it's actually slower than that by a lot). 
+
+*Add a feature to automatically shift to the next freq band/gain and give the
+user just a "fire" button to move onto the next stage after the circuit
+has been adjusted.
+
+*Add a "Repeat scan?" confirmation message box if a scan is repeated
+
+* Add a panel ("Generator:") which lets the user control some AWG settings
+Freq mode: auto (min, default, max ?) from file (input amplitudes)
+Ampl mode: Freq
+
+amplitude: Sel. frquency
+frequency: sel. amplitude (fix, variable (min, max)), file
