@@ -28,7 +28,6 @@
 #                                                                                                   #
 #***************************************************************************************************#
 
-
 #Import packages
 
 import visa
@@ -55,22 +54,25 @@ numPeaksPerFrame = 10; #No. oscillations to fit on the scope screen when aquirin
 numDivHoriz = 12; #No. horiz. divs on scope screen
 numDivVert = 8; #No. vert divs on scope scren
 timeWithConstReading = .5; #Time in seconds for reading to stay the same before recording the data point (default: .2) ().5 also good)
-maxPercentAccepted = 5; #Maximum percent change allowed while still being considered 'constant' (default: 10) (5 also good)
+maxPercentAccepted = 10; #Maximum percent change allowed while still being considered 'constant' (default: 10) (5 also good)
 maxPercentAcceptedFrequencyDelta = 5; #Maximum percent difference allowed between set frequency and measured frequency (to ensure equilibrium) (default: 5)
-maxRetryTime = 6; #Maximum time allowed for scan to retry getting a consistant data point (default: 6)
+maxRetryTime = 15; #Maximum time allowed for scan to retry getting a consistant data point (default: 6)
 
 #Vertical Resolution Parameters
 vertExpandFactor = 1.5; #factor by which to expand the vertical scale when guessing how to scale vertically (bigger # shrinks signal more, 1 is min). (default: 1.5)
-turnOffAfterScan = False; #Turn off the generator after an individaual scan
-setMeasDelay = 1200; #Delay in ms between setting the lab instruments to the data point & first measuring the values (to let equilibrium set up) (default: 700)
+turnOffAfterScan = False; #Turn off the generator after an individaual scan (True for IV-Curves)
+setMeasDelay = 700; #Delay in ms between setting the lab instruments to the data point & first measuring the values (to let equilibrium set up) (default: 700)
 
 #Dual-sweep settings
 autoDualSweep = True; #When performing an automatic-scaled scan
-crudeVertSweepFactor = 2; #Algorithm: volts per division = (input_amplitude * crudeVertSweepFactor); (Default: 2)
-fineVertScaleFactor = 1.2; #Factor by which to scale measured amplitude when selecting a fine scale (Default: 1.2)
+crudeVertSweepFactor = 2/8; #Algorithm: volts per division = (input_amplitude * crudeVertSweepFactor); (Default: 2) (2/8 for IV-Curves)
+fineVertScaleFactor = 1.5; #Factor by which to scale measured amplitude when selecting a fine scale (Default: 1.2) (1.5 for IV-Curves)
 
 #Save settings
 saveUntilClear = True; #(If not in multi-band mode) saves TFs until 'Clear' is hit. Saves all when save command given.
+
+#IV settings
+shunt_resistance = 100; #Resistance of shunt resistor
 
 voiceAlerts = False;
 
@@ -127,12 +129,15 @@ imeas = []; #Input ampl. buffer
 omeas = []; #output ampl. buffer
 meas3 = []; #CH3 buffer
 meas4 = []; #CH4 buffer
+saveType = [];
 
 fmeasSave = []; #2D save buffer for fmeas Values
 imeasSave = []; #2D save buffer for imeas values
 omeasSave = []; #2D save buffer for omeas values
 meas3Save = []; #2D save buffer for meas3 values
 meas4Save = []; #2D save buffer for meas4 values
+dc1Save = []; #2D save buffer for meas3 values
+dc2Save = []; #2D save buffer for meas4 values
 
 #Define scale buffers (for dual-auto-sweep)
 fineScaleCh2 = []; #Fine-scale buffer (CH1)
@@ -178,7 +183,9 @@ scope.write("TRIG:EDG:SOUR CHAN1"); #Set trigger source to channel 1
 scope.write("TRIG:MODE EDGE") #Set trigger mode to edge
 scope.write("TRIG:EDGE:LEV 0") #Set trigger level to 0 V
 
-awg.write("C2:BSWV WVTP,SINE")
+awg.write("C2:BSWV WVTP,SINE"); #Set AWG to output a sine wave
+# awg.write("C2:BSWV WVTP,DC"); #Set AWG to output a DC signal
+awg.write("C2:BSWV OFST,0"); #Set DC offset to 0V
 
 #Define Subroutines
 ##def measVsAmp(fmeas, omeas, imeas, meas3, meas4):
@@ -247,6 +254,7 @@ def listCeil(x, rvals):
     for cc in rvals:
         if (x <= cc):
             return cc;
+    return max(rvals);
 #
 # Rounds the number 'x' to the closest oscilloscope 'course'
 # scaling value.
@@ -280,20 +288,36 @@ def collect():
     # fr.append(float(scope.query("MEAS:COUN:VAL?")));
     added = 0;
     try:
-        fr = float(scope.query("MEAS:STAT:ITEM? CURR,FREQ,CHAN1"));
-        added = 1;
-        c1 = float(scope.query("MEAS:STAT:ITEM? CURR,VPP,CHAN1"));
-        added = 2;
-        #        in_rms.append(float(scope.query("MEAS:STAT:ITEM? CURR,VRMS,CHAN1")));
-        c2 = float(scope.query("MEAS:STAT:ITEM? CURR,VPP,CHAN2"));
-        added = 3;
-        #        out_rms.append(float(scope.query("MEAS:STAT:ITEM? CURR,VRMS,CHAN2")));
-        if (ch3on.get() == 1):
-            c3 = float(scope.query("MEAS:STAT:ITEM? CURR,VPP,CHAN3"));
-        added = 4;
-        if (ch4on.get() == 1):
-            c4 = float(scope.query("MEAS:STAT:ITEM? CURR,VPP,CHAN4"));
-        added = 5;
+        if (scanMode.get() != 3):
+            fr = float(scope.query("MEAS:STAT:ITEM? CURR,FREQ,CHAN1"));
+            added = 1;
+            c1 = float(scope.query("MEAS:STAT:ITEM? CURR,VPP,CHAN1"));
+            added = 2;
+            #        in_rms.append(float(scope.query("MEAS:STAT:ITEM? CURR,VRMS,CHAN1")));
+            c2 = float(scope.query("MEAS:STAT:ITEM? CURR,VPP,CHAN2"));
+            added = 3;
+            #        out_rms.append(float(scope.query("MEAS:STAT:ITEM? CURR,VRMS,CHAN2")));
+            if (ch3on.get() == 1):
+                c3 = float(scope.query("MEAS:STAT:ITEM? CURR,VPP,CHAN3"));
+            added = 4;
+            if (ch4on.get() == 1):
+                c4 = float(scope.query("MEAS:STAT:ITEM? CURR,VPP,CHAN4"));
+            added = 5;
+        else:
+            fr = 0;
+            added = 1;
+            c1 = float(scope.query("MEAS:STAT:ITEM? CURR,VAVG,CHAN1"));
+            added = 2;
+            #        in_rms.append(float(scope.query("MEAS:STAT:ITEM? CURR,VRMS,CHAN1")));
+            c2 = float(scope.query("MEAS:STAT:ITEM? CURR,VAVG,CHAN2"));
+            added = 3;
+            #        out_rms.append(float(scope.query("MEAS:STAT:ITEM? CURR,VRMS,CHAN2")));
+            if (ch3on.get() == 1):
+                c3 = float(scope.query("MEAS:STAT:ITEM? CURR,VPP,CHAN3"));
+            added = 4;
+            if (ch4on.get() == 1):
+                c4 = float(scope.query("MEAS:STAT:ITEM? CURR,VPP,CHAN4"));
+            added = 5;
         #            print("\t** f = " + "{:09.4e}".format(freqs[i]) + " Hz\t**\tVin = " + "{:09.4e}".format(in_vpp[i]) + " Vpp\t" + "{:09.4e}".format(in_rms[i]) + " Vrms\t**\tVout = " + "{:09.4e}".format(out_vpp[i]) + " Vpp\t" + "{:09.4e}".format(out_rms[i]) + "Vrms\t**\tVlevel = " + "{:09.4e}".format(level_avg[i]) + "V");
         print("\t** f = " + "{:09.4e}".format(fr) + " Hz\t**\tVin = " + "{:09.4e}".format(c1) + " Vpp\t**\tVout = " + "{:09.4e}".format(c2) + " Vpp\t**\tVc3 = " + "{:09.4e}".format(c3) + "V" + " Vpp\t**\tVc4 = " + "{:09.4e}".format(c4) + "V");
     except Exception as e:
@@ -370,17 +394,30 @@ def meas(fmeas, imeas, omeas, meas3, meas4, crudeSweep):
 
     amplitude = 1;
 
+
+    #Make sure initial amplitude doesn't fry anything
+    if (len(freqs) > 0 and scanMode.get() != 3):
+        awg.write("C2:BSWV AMP,"+str(ampls[0]));
+    elif (len(freqs) > 0):
+        awg.write("C2:BSWV OFST,"+str(ampls[0]));
+
     #Turn on generator
     awg.write("C2:OUTP ON");
 
     for idx in range(len(freqs)):
+
         #Set frequency
-        awg.write("C2:BSWV FRQ,"+str(freqs[idx]))
-        print("SCPI<AWG> C2:BSWV FRQ,"+str(freqs[idx]));
+        if (scanMode.get() != 3):
+            awg.write("C2:BSWV FRQ,"+str(freqs[idx]))
+            print("SCPI<AWG> C2:BSWV FRQ,"+str(freqs[idx]));
 
         #Set amplitude
-        awg.write("C2:BSWV AMP,"+str(ampls[idx]));
-        print("SCPI<AWG> C2:BSWV AMP,"+str(ampls[idx]));
+        if (scanMode.get() != 3): #VPP Amplitude
+            awg.write("C2:BSWV AMP,"+str(ampls[idx]));
+            print("SCPI<AWG> C2:BSWV AMP,"+str(ampls[idx]));
+        else:
+            awg.write("C2:BSWV OFST,"+str(ampls[idx]));
+            print("SCPI<AWG> C2:BSWV OFST,"+str(ampls[idx]));
 
         #Configure scope settings
         if (aquisitionMode.get() == 0): #Automatic
@@ -394,14 +431,25 @@ def meas(fmeas, imeas, omeas, meas3, meas4, crudeSweep):
             #********** Determine volts/div setting
 
             #Channel 1 always a function of input amplitude
-            voltsPerDiv = courseCeil(ampls[idx]/numDivVert*vertExpandFactor);
-            scope.write("CHAN1:SCAL "+str(voltsPerDiv));
-            print("SCPI<SCOPE> CHAN1:SCAL "+str(voltsPerDiv));
+            if (scanMode.get() != 3):
+                voltsPerDiv = courseCeil(ampls[idx]/numDivVert*vertExpandFactor);
+                scope.write("CHAN1:SCAL "+str(voltsPerDiv));
+                print("SCPI<SCOPE> CHAN1:SCAL "+str(voltsPerDiv));
+            else:
+                voltsPerDiv = courseCeil(ampls[idx]*2/numDivVert*vertExpandFactor); #Mult ampl by 2 b/c only using half the scale
+                scope.write("CHAN1:SCAL "+str(voltsPerDiv));
+                print("SCPI<SCOPE> CHAN1:SCAL "+str(voltsPerDiv));
 
             #Iteratively select scale for CH2, 3, 4
             if (autoDualSweep == True): #If dual-sweep... (ie. set to auto vertical scale (!from file) and dual-sweep is on)
                 if (crudeSweep): #If performing crudeSweep, voltsPerDiv for every channel is just scaled up greatly from CH1 scale.
-                    voltsPerDiv = courseCeil(ampls[idx]*crudeVertSweepFactor);
+
+                    voltsPerDiv = 0;
+                    if (scanMode.get() != 3):
+                        voltsPerDiv = courseCeil(ampls[idx]*crudeVertSweepFactor);
+                    else:
+                        voltsPerDiv = courseCeil(ampls[idx]*2*crudeVertSweepFactor); #Mult ampl by 2 b/c only using half the scale
+                        print(str(ampls[idx]) + " * 2 * " + str(crudeVertSweepFactor));
 
                     scope.write("CHAN2:SCAL "+str(voltsPerDiv));
                     print("SCPI<SCOPE> CHAN2:SCAL "+str(voltsPerDiv));
@@ -415,8 +463,13 @@ def meas(fmeas, imeas, omeas, meas3, meas4, crudeSweep):
                     if (len(fineScaleCh2) < 1):
                         print("Fine scale list is unpopulated!");
                         return False;
-                    scope.write("CHAN2:SCAL "+str(fineScaleCh2[idx]));
-                    print("SCPI<SCOPE> CHAN2:SCAL "+str(fineScaleCh2[idx]));
+
+                    if (scanMode.get() != 3):
+                        scope.write("CHAN2:SCAL "+str(fineScaleCh2[idx]));
+                        print("SCPI<SCOPE> CHAN2:SCAL "+str(fineScaleCh2[idx]));
+                    else:
+                        scope.write("CHAN2:SCAL "+str(fineScaleCh2[idx]*2)); #Mult ampl by two b/c only using half the scale
+                        print("SCPI<SCOPE> CHAN2:SCAL "+str(fineScaleCh2[idx]*2)); #Mult ampl by two b/c only using half the scale
                     if (ch3on.get() == 1):
                         scope.write("CHAN3:SCAL "+str(fineScaleCh3[idx]));
                         print("SCPI<SCOPE> CHAN3:SCAL "+str(fineScaleCh3[idx]));
@@ -484,7 +537,12 @@ def meas(fmeas, imeas, omeas, meas3, meas4, crudeSweep):
             else: #Measurement didn'throw an error or give corrupted data
                 num_failed = 0; #Reset fail counter
                 if (verifying):
-                    dval = max(mpc(oldf, fr), mpc(oldi, c1), mpc(oldo, c2), mpc(old3, c3), mpc(old4, c4));
+
+                    #Get max error (and ignore freq if I-V curve)
+                    if (scanMode.get() != 3):
+                        dval = max(mpc(oldf, fr), mpc(oldi, c1), mpc(oldo, c2), mpc(old3, c3), mpc(old4, c4));
+                    else:
+                        dval = max(mpc(oldi, c1), mpc(oldo, c2), mpc(old3, c3), mpc(old4, c4));
                     if (dval <= maxPercentAccepted):
                         print("Passed scan No. " + str(total_no_scans) + " with an error of " + str(dval) + " %. Tot. elapsed time: " + str(time.time()-start) + " sec");
                         break; #The measurement has satisfied the subroutine's integrity check
@@ -502,7 +560,7 @@ def meas(fmeas, imeas, omeas, meas3, meas4, crudeSweep):
                             return False;
                         sleep(timeWithConstReading); #Wait a bit...
                 else:
-                    if (mpc(fr, freqs[idx]) > maxPercentAcceptedFrequencyDelta): #Ensure measured and set frequencies match (within a certain margin of error)
+                    if (scanMode.get() !=3 and mpc(fr, freqs[idx]) > maxPercentAcceptedFrequencyDelta): #Ensure measured and set frequencies match (within a certain margin of error)
                         print("The measurement, although non-corrupt, failed the equilibrium+integrity check.");
                         print("\tFrequency was out of spec. Set: " + str(freqs[idx]) + " Hz \tMeas: " + str(fr) + " Hz");
                         print("\tTET: "+str(time.time()-start));
@@ -636,9 +694,22 @@ def scan():
         print("Plotting:")
         print("\tFreqs: " + str(fmeas));
         print("\tGains:" + str(gains));
+    elif(scanMode.get() == 3):
+        for i in range(len(omeas)):
+            imeas[i] = imeas[i] - omeas[i]; #Account for voltage across shunt resistor
+            omeas[i] = omeas[i]*shunt_resistance; #Convert to current w/ shunt resistance
+        plot.plot(imeas, omeas, linestyle='dashed', marker='o', markersize=3);
+        print("Plotting:")
+        print("\tInputs: " + str(imeas));
+        print("\tOutputs:" + str(omeas));
+
 
     #Save results
-    if (scanMode.get() == 0 or scanMode.get() == 1):
+    if (scanMode.get() == 3):
+        saveType.append("VAVG");
+    else:
+        saveType.append("VPP");
+    if (scanMode.get() == 0 or scanMode.get() == 1 or scanMode.get() == 3):
 
         #Clear save buffers if not saving old...
         if (not saveUntilClear):
@@ -655,6 +726,8 @@ def scan():
         omeasSave.append(omeas);
         meas3Save.append(meas3);
         meas4Save.append(meas4);
+
+
 
     #Get band & gain & update status panels
     elif (scanMode.get() == 2): #Only if multiband update status panels
@@ -926,7 +999,28 @@ def save():
                 print("Failed to save data.");
                 print("\t"+str(e));
                 return;
-    else:
+    elif (scanMode.get() == 3): #If not a multiband mode...
+        if (saveUntilClear): #If multiple sets of data allowed...
+            print("Saving all TFs");
+            kvs = begin_kvar(hd); #Create the kvar string
+            for idx in range(len(fmeasSave)): #For each batch of data...
+                kvs = assemble_kvar(kvs, "freqs"+str(idx), fmeasSave[idx]); #Save freq. array
+                kvs = assemble_kvar(kvs, "V_vavg"+str(idx), imeasSave[idx]); #Save input data array
+                kvs = assemble_kvar(kvs, "I_vavg"+str(idx), omeasSave[idx]); #Save output data array
+                kvs = assemble_kvar(kvs, "ch3_vpp"+str(idx), meas3Save[idx]); #Save ch3 data array
+                kvs = assemble_kvar(kvs, "ch4_vpp"+str(idx), meas4Save[idx]); #Save ch4 data array
+                kvs = assemble_kvar(kvs, "Rshunt"+str(idx), shunt_resistance); #Save shunt resistance used
+            write_assembled_kvar(fn, kvs);
+            print("Wrote: "+kvs);
+        else:
+            print("Saving last TF");
+            try:
+                write_kvar(fn,hd, freqs=fmeasSave[0], in_vpp=imeasSave[0], out_vpp=omeasSave[0], ch3_vpp=meas3Save[0], ch4_vpp=meas4Save[0]);
+            except Exception as e:
+                print("Failed to save data.");
+                print("\t"+str(e));
+                return;
+    else: #Multiband
         print("Oh no! This isn't implimented yet!");
         return;
         pass;
@@ -972,14 +1066,19 @@ def redrawGraph():
         plot.set_ylabel("Output Amplitude (Vpp)");
         # plot.set_ylim(0, 10);
         # plot.set_xlim(0, 10);
+        plot.set_title("Transfer Function");
+    elif (scanMode.get() == 3):
+        plot.set_xlabel("Voltage (V DC)");
+        plot.set_ylabel("Current (A)");
+        plot.set_title("I-V Curve");
     else:
         plot.set_ylim(-40, 40);
         plot.set_xlim(10, 25e3);
         plot.set_xlabel("Frequency (Hz)");
         plot.set_ylabel("Gain (dB)");
+        plot.set_title("Transfer Function");
 
 
-    plot.set_title("Transfer Function");
     plot.grid(b=True);
     canvas.draw()
 
@@ -994,6 +1093,10 @@ def setScan1():
 def setScan2():
     enableMultibands();
     setToFreqMode();
+
+def setScan3():
+    disableMultibands();
+    setToIVMode();
 
 def disableMultibands():
     bandEntryBandRB1.configure(state = tk.DISABLED)
@@ -1014,17 +1117,58 @@ def disableMultibands():
     highMinBandScanLabel.configure(fg='#999999');
     baseBandScanLabel.configure(fg='#999999');
 
-    pass;
+def setToIVMode():
+    scope.write("CHAN1:COUP DC");
+    scope.write("CHAN2:COUP DC");
+    scope.write("TRIG:SWE AUTO");
+    scope.write("MEAS:STAT:ITEM VAVG,CHAN1"); #Measure VPP
+    scope.write("MEAS:STAT:ITEM VAVG,CHAN2"); #Measure VPP
+    awg.write("C2:BSWV WVTP,DC"); #Set AWG to output a DC signal
+    awg.write("C2:BSWV OFST,0"); #Set DC offset to 0V
+    scaleNumberLabel0.configure(text='Start (V DC):');
+    scaleNumberLabel2.configure(text='End (V DC):');
+
+    if (float(scaleNumberEntry0.get()) > 5):
+        scaleNumberEntry0.delete(0, 'end');
+        scaleNumberEntry0.insert(0,.1) #Set default min freq. to 10Hz
+
+    if (float(scaleNumberEntry2.get()) > 20):
+        scaleNumberEntry2.delete(0, 'end');
+        scaleNumberEntry2.insert(0,5) #Set default min freq. to 10Hz
 
 def setToFreqMode():
+    scope.write("TRIG:SWE NORM");
+    scope.write("MEAS:STAT:ITEM FREQ,CHAN1");
+    scope.write("MEAS:STAT:ITEM VPP,CHAN1");
+    scope.write("MEAS:STAT:ITEM VPP,CHAN2");
+    scope.write("MEAS:STAT:ITEM VPP,CHAN3");
+    scope.write("MEAS:STAT:ITEM VPP,CHAN4");
+    awg.write("C2:BSWV WVTP,SINE"); #Set AWG to output a sine wave
+    awg.write("C2:BSWV OFST,0"); #Set DC offset to 0V
     scaleNumberLabel0.configure(text='Start (Hz):');
     scaleNumberLabel2.configure(text='End (Hz):');
 
+    # if (float(scaleNumberEntry0.get()) < 1):
+    #     scaleNumberEntry0.delete(0, 'end');
+    #     scaleNumberEntry0.insert(0,10) #Set default min freq. to 10Hz
+    #
+    # if (float(scaleNumberEntry2.get()) < 20):
+    #     scaleNumberEntry2.delete(0, 'end');
+    #     scaleNumberEntry2.insert(0,20e3) #Set default min freq. to 10Hz
+
 def setToAmplMode():
+    scope.write("TRIG:SWE NORM");
+    scope.write("MEAS:STAT:ITEM FREQ,CHAN1");
+    scope.write("MEAS:STAT:ITEM VPP,CHAN1");
+    scope.write("MEAS:STAT:ITEM VPP,CHAN2");
+    scope.write("MEAS:STAT:ITEM VPP,CHAN3");
+    scope.write("MEAS:STAT:ITEM VPP,CHAN4");
+    awg.write("C2:BSWV WVTP,SINE"); #Set AWG to output a sine wave
+    awg.write("C2:BSWV OFST,0"); #Set DC offset to 0V
     scaleNumberLabel0.configure(text='Start (Vpp):');
     scaleNumberLabel2.configure(text='End (Vpp):');
 
-    if (float(scaleNumberEntry0.get()) > 20):
+    if (float(scaleNumberEntry0.get()) > 5):
         scaleNumberEntry0.delete(0, 'end');
         scaleNumberEntry0.insert(0,.1) #Set default min freq. to 10Hz
 
@@ -1151,10 +1295,13 @@ scanModeLabel.grid(row=1, column=0, sticky='E');
 scanMode = tk.IntVar();
 scanModeRB1 = tk.Radiobutton(modeFrame, text="Amplitude", variable=scanMode, value=0, command=setScan0);
 scanModeRB1.grid(row=1, column=1);
+scanModeRB3 = tk.Radiobutton(modeFrame, text="I-V Curve", variable=scanMode, value=3, command=setScan3);
+scanModeRB3.grid(row=1, column=2, stick='W');
 scanModeRB2 = tk.Radiobutton(modeFrame, text="Freq.", variable=scanMode, value=1, command=setScan1);
-scanModeRB2.grid(row=1, column=2, stick='W');
+scanModeRB2.grid(row=1, column=3, stick='W');
 scanModeRB3 = tk.Radiobutton(modeFrame, text="Freq. (multi-band)", variable=scanMode, value=2, command=setScan2);
-scanModeRB3.grid(row=1, column=3, stick='W');
+scanModeRB3.grid(row=1, column=4, stick='W');
+
 
 ch3on = tk.IntVar();
 ch4on = tk.IntVar();
